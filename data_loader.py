@@ -1,7 +1,7 @@
 import torch
 import torchvision.datasets as dsets
 from torchvision import transforms
-
+from torchtcn.utils.dataset import (DoubleViewPairDataset,)
 
 class Data_Loader():
     def __init__(self, train, dataset, image_path, image_size, batch_size, shuf=True):
@@ -34,13 +34,34 @@ class Data_Loader():
         transforms = self.transform(True, True, True, True)
         dataset = dsets.ImageFolder(self.path+'/CelebA', transform=transforms)
         return dataset
+    def load_tcn(self):
+        transformer_train = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize(self.imsize),
+            # transforms.RandomResizedCrop(IMAGE_SIZE[0], scale=(0.9, 1.0)),
+            # transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            # normalize
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
 
+        sampler = None
+        shuffle = True
+        # only one view pair in batch
+        # sim_frames = 5
+        transformed_dataset_train = DoubleViewPairDataset(vid_dir=self.path,
+                                                          number_views=2,
+                                                          # std_similar_frame_margin_distribution=sim_frames,
+                                                          transform_frames=transformer_train)
+        return transformed_dataset_train
 
     def loader(self):
         if self.dataset == 'lsun':
             dataset = self.load_lsun()
         elif self.dataset == 'celeb':
             dataset = self.load_celeb()
+        elif self.dataset == 'tcn':
+            dataset =self.load_tcn()
 
         loader = torch.utils.data.DataLoader(dataset=dataset,
                                               batch_size=self.batch,

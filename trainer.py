@@ -10,7 +10,7 @@ from torchvision.utils import save_image
 
 from sagan_models import Generator, Discriminator
 from utils import *
-
+from torchtcn.utils.dataset import (DoubleViewPairDataset,)
 class Trainer(object):
     def __init__(self, data_loader, config):
 
@@ -55,6 +55,9 @@ class Trainer(object):
         # Path
         self.log_path = os.path.join(config.log_path, self.version)
         self.sample_path = os.path.join(config.sample_path, self.version)
+        self.vae_rec_path = os.path.join(config.sample_path, "vae_rec")
+        os.makedirs(self.vae_rec_path, exist_ok=True)#TODO
+        print('vae_rec_path: {}'.format(self.vae_rec_path))
         self.model_save_path = os.path.join(config.model_save_path, self.version)
 
         self.build_model()
@@ -86,6 +89,8 @@ class Trainer(object):
 
         # Start time
         start_time = time.time()
+
+        key_views = ["frames views {}".format(i) for i in range(2)]
         for step in range(start, self.total_step):
 
             # ================== Train D ================== #
@@ -93,10 +98,18 @@ class Trainer(object):
             self.G.train()
 
             try:
-                real_images, _ = next(data_iter)
+                if isinstance(self.data_loader.dataset,DoubleViewPairDataset):
+                    data=  next(data_iter)
+                    real_images = torch.cat([data[key_views[0]], data[key_views[1]]])
+                else:
+                    real_images, _ = next(data_iter)
             except:
                 data_iter = iter(self.data_loader)
-                real_images, _ = next(data_iter)
+                if isinstance(self.data_loader.dataset,DoubleViewPairDataset):
+                    data=  next(data_iter)
+                    real_images = torch.cat([data[key_views[0]], data[key_views[1]]])
+                else:
+                    real_images, _ = next(data_iter)
 
             # Compute loss with real images
             # dr1, dr2, df1, df2, gf1, gf2 are attention scores
@@ -149,6 +162,25 @@ class Trainer(object):
                 d_loss.backward()
                 self.d_optimizer.step()
 
+            # ================== Train VAE================== #
+            encoded = self.G.encoder(real_images)
+            mu = encoded[0]
+            logvar = encoded[1]
+
+            KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
+            KLD = torch.sum(KLD_element).mul_(-0.5)
+
+            sampled = self.G.encoder.sampler(encoded)
+            rec,_,_ = self.G(sampled)
+
+            MSEerr = self.MSECriterion(rec, real_images)
+
+            VAEerr = KLD + MSEerr
+            self.reset_grad()
+            VAEerr.backward()
+            self.g_optimizer.step()
+
+
             # ================== Train G and gumbel ================== #
             # Create random noise
             z = tensor2var(torch.randn(real_images.size(0), self.z_dim))
@@ -171,16 +203,18 @@ class Trainer(object):
                 elapsed = time.time() - start_time
                 elapsed = str(datetime.timedelta(seconds=elapsed))
                 print("Elapsed [{}], G_step [{}/{}], D_step[{}/{}], d_out_real: {:.4f}, "
-                      " ave_gamma_l3: {:.4f}, ave_gamma_l4: {:.4f}".
+                      " ave_gamma_l3: {:.4f}, ave_gamma_l4: {:.4f},vae {:.4f}".
                       format(elapsed, step + 1, self.total_step, (step + 1),
                              self.total_step , d_loss_real.data[0],
-                             self.G.attn1.gamma.mean().data[0], self.G.attn2.gamma.mean().data[0] ))
+                             self.G.attn1.gamma.mean().data[0], self.G.attn2.gamma.mean().data[0] ,VAEerr.data[0]))
 
             # Sample images
             if (step + 1) % self.sample_step == 0:
                 fake_images,_,_= self.G(fixed_z)
                 save_image(denorm(fake_images.data),
                            os.path.join(self.sample_path, '{}_fake.png'.format(step + 1)))
+                save_image(denorm(rec.data),
+                           os.path.join(self.vae_rec_path, '{}_var_rec.png'.format(step + 1)))
 
             if (step+1) % model_save_step==0:
                 torch.save(self.G.state_dict(),
@@ -195,7 +229,7 @@ class Trainer(object):
         if self.parallel:
             self.G = nn.DataParallel(self.G)
             self.D = nn.DataParallel(self.D)
-
+        self.MSECriterion = nn.MSELoss()
         # Loss and optimizer
         # self.g_optimizer = torch.optim.Adam(self.G.parameters(), self.g_lr, [self.beta1, self.beta2])
         self.g_optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.G.parameters()), self.g_lr, [self.beta1, self.beta2])
