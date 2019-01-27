@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 from sagan_models import Discriminator, Generator
 from torch.autograd import Variable
+from torch.nn import functional as F
 from torchtcn.utils.dataset import DoubleViewPairDataset
 from torchvision.utils import save_image
 from utils import *
@@ -70,6 +71,8 @@ class Trainer(object):
         os.makedirs(self.vae_rec_path, exist_ok=True)  # TODO
         print('vae_rec_path: {}'.format(self.vae_rec_path))
         self.model_save_path = os.path.join(config.model_save_path, self.version)
+
+        self.num_pixels = self.imsize * 2 * 3
 
         self.build_model()
 
@@ -174,13 +177,19 @@ class Trainer(object):
             encoded = self.G.encoder(real_images)
             mu = encoded[0]
             logvar = encoded[1]
-
             KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
             KLD = torch.sum(KLD_element).mul_(-0.5)
 
             sampled = self.G.encoder.sampler(encoded)
             fake_images, _, _ = self.G(sampled)
-            MSEerr = self.MSECriterion(fake_images, real_images)
+            # MSEerr = self.MSECriterion(fake_images, real_images)
+            # Reconstruction loss is pixel wise cross-entropy
+            a = fake_images.view(-1, self.num_pixels)
+            b = real_images.view(-1, self.num_pixels)
+            MSEerr = F.binary_cross_entropy(denorm(a),
+                                            denorm(b))
+            # MSEerr = F.binary_cross_entropy(fake_images.view(-1, self.num_pixels),
+            #                                 real_images.view(-1, self.num_pixels))
             rec = fake_images
             VAEerr = KLD + MSEerr
             self.reset_grad()
