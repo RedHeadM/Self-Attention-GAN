@@ -298,11 +298,14 @@ class Trainer(object):
                 n = 8
                 imgs = denorm(torch.cat([real_images.data[:n], rec.data[:n]]))
                 title = '{}_var_rec'.format(step + 1)
+                title_fixed = '{}_fixed'.format(step + 1)
                 save_image(imgs,
                            os.path.join(self.vae_rec_path, title+".png"), nrow=n)
                 if vis is not None:
                     self.rec_win = vis.images(imgs, win=self.rec_win,
                                               opts=dict(title=title, width=64*n, height=64*2),)
+                    self.fixed_win = vis.images(fake_images, win=self.fixed_win,
+                                              opts=dict(title=title_fixed, width=64*n, height=64*2),)
 
             if (step+1) % model_save_step == 0:
                 torch.save(self.G.state_dict(),
@@ -312,6 +315,7 @@ class Trainer(object):
 
     def build_model(self):
         self.rec_win = None
+        self.fixed_win = None
         self.d_plot = None
         self.d_plot_fake = None
         self.d_plot_vae = None
