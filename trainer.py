@@ -85,9 +85,15 @@ class Trainer(object):
             self.load_pretrained_model()
 
     def train(self):
+        def cycle(iterable):
+            while True:
+                for x in iterable:
+                    yield x
 
+        # Using itertools.cycle has an important drawback, in that it does not shuffle the data after each iteration:
+        # WARNING  itertools.cycle  does not shuffle the data after each iteratio
         # Data iterator
-        data_iter = iter(self.data_loader)
+        data_iter = iter(cycle(self.data_loader))
         step_per_epoch = len(self.data_loader)
         model_save_step = int(self.model_save_step * step_per_epoch)
 
@@ -133,8 +139,8 @@ class Trainer(object):
                 mapping_cam_info_one_hot[cam_inf] = to_hot_l
                 if "view_0" in cam_inf:
                     n_classes.append(n_bins)
-        print('n_classes: {}'.format(n_classes))
-
+        print('cam view one hot infputs {}'.format(n_classes))
+        assert sum(n_classes)== self.cam_view_z
         for step in range(start, self.total_step):
 
             # ================== Train D ================== #
@@ -166,11 +172,12 @@ class Trainer(object):
                 d_loss_real = torch.nn.ReLU()(1.0 - d_out_real).mean()
 
             # apply Gumbel Softmax
-            z=torch.randn(real_images.size(0), self.z_dim).cuda()
-            z=torch.cat([*d_one_hot,z],dim=1) # add view info
+            encoded = self.G.encoder(real_images)
+            sampled = self.G.encoder.sampler(encoded)
+            # z=torch.randn(real_images.size(0), self.z_dim).cuda()
+            z=torch.cat([*d_one_hot,sampled],dim=1) # add view info
             if  fixed_z is None:
-                fixed_z=tensor2var(torch.randn(self.batch_size, self.z_dim))
-                fixed_z=torch.cat([*d_one_hot,fixed_z],dim=1)# add view info
+                fixed_z=tensor2var(torch.cat([*d_one_hot,sampled],dim=1))# add view info
             z = tensor2var(z)
             fake_images, gf1, gf2 = self.G(z)
             d_out_fake, df1, df2 = self.D(fake_images)
@@ -216,7 +223,7 @@ class Trainer(object):
             mu = encoded[0]
             logvar = encoded[1]
             KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
-            # KLD = torch.sum(KLD_element).mul_(-0.5)
+            KLD = torch.sum(KLD_element).mul_(-0.5)
 
             sampled = self.G.encoder.sampler(encoded)
             z=torch.cat([*d_one_hot,sampled],dim=1)# add view info
@@ -231,8 +238,8 @@ class Trainer(object):
             # MSEerr = F.binary_cross_entropy(fake_images.view(-1, self.num_pixels),
             #                                 real_images.view(-1, self.num_pixels))
             rec = fake_images
-            VAEerr = MSEerr
-            # VAEerr = KLD + MSEerr
+            # VAEerr = MSEerr
+            VAEerr = KLD + MSEerr
             self.reset_grad()
             # VAEerr.backward()
             # self.g_optimizer.step()
@@ -293,7 +300,8 @@ class Trainer(object):
             # Sample images
             if True or  (step + 1) % self.sample_step == 0:
                 fake_images, _, _ = self.G(fixed_z)
-                save_image(denorm(fake_images.data),
+                fake_images=denorm(fake_images)
+                save_image(fake_images.data,
                            os.path.join(self.sample_path, '{}_fake.png'.format(step + 1)))
                 n = 8
                 imgs = denorm(torch.cat([real_images.data[:n], rec.data[:n]]))
