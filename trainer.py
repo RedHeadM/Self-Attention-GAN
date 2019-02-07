@@ -92,7 +92,7 @@ class Trainer(object):
         model_save_step = int(self.model_save_step * step_per_epoch)
 
         # Fixed input for debugging
-        fixed_z = tensor2var(torch.randn(self.batch_size, self.z_dim))
+        fixed_z = None
 
         # Start with trained model
         if self.pretrained_model:
@@ -167,7 +167,10 @@ class Trainer(object):
 
             # apply Gumbel Softmax
             z=torch.randn(real_images.size(0), self.z_dim).cuda()
-            z=torch.cat([*d_one_hot,z],dim=1)# add view info
+            z=torch.cat([*d_one_hot,z],dim=1) # add view info
+            if  fixed_z is None:
+                fixed_z=tensor2var(torch.randn(self.batch_size, self.z_dim))
+                fixed_z=torch.cat([*d_one_hot,fixed_z],dim=1)# add view info
             z = tensor2var(z)
             fake_images, gf1, gf2 = self.G(z)
             d_out_fake, df1, df2 = self.D(fake_images)
@@ -288,7 +291,7 @@ class Trainer(object):
                     ))
 
             # Sample images
-            if (step + 1) % self.sample_step == 0:
+            if True or  (step + 1) % self.sample_step == 0:
                 fake_images, _, _ = self.G(fixed_z)
                 save_image(denorm(fake_images.data),
                            os.path.join(self.sample_path, '{}_fake.png'.format(step + 1)))
