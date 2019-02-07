@@ -50,7 +50,7 @@ class Self_Attn(nn.Module):
 class Generator(nn.Module):
     """Generator."""
 
-    def __init__(self, batch_size, image_size=64, z_dim=100, conv_dim=64):
+    def __init__(self, batch_size, image_size=64, z_dim=100,extra_inputs_gen=0, conv_dim=64):
         super(Generator, self).__init__()
         self.imsize = image_size
         layer1 = []
@@ -60,7 +60,7 @@ class Generator(nn.Module):
 
         repeat_num = int(np.log2(self.imsize)) - 3
         mult = 2 ** repeat_num  # 8
-        layer1.append(SpectralNorm(nn.ConvTranspose2d(z_dim, conv_dim * mult, 4)))
+        layer1.append(SpectralNorm(nn.ConvTranspose2d(z_dim+extra_inputs_gen, conv_dim * mult, 4)))
         layer1.append(nn.BatchNorm2d(conv_dim * mult))
         layer1.append(nn.ReLU())
 

@@ -13,7 +13,7 @@ from torch.nn import functional as F
 from torchtcn.utils.dataset import DoubleViewPairDataset
 from torchvision.utils import save_image
 from utils import *
-
+from collections import OrderedDict
 try:
     import visdom
     vis = visdom.Visdom()
@@ -37,6 +37,7 @@ class Trainer(object):
         self.imsize = config.imsize
         self.g_num = config.g_num
         self.z_dim = config.z_dim
+        self.cam_view_z = 15+30+10
         self.g_conv_dim = config.g_conv_dim
         self.d_conv_dim = config.d_conv_dim
         self.parallel = config.parallel
@@ -102,27 +103,59 @@ class Trainer(object):
         # Start time
         start_time = time.time()
 
-        key_views = ["frames views {}".format(i) for i in range(2)]
+        num_views = 2
+        key_views = ["frames views {}".format(i) for i in range(num_views)]
+
+        lable_keys_cam_view_info = []  # list with keys for view 0 and view 1
+        for view_i in range(num_views):
+            lable_keys_cam_view_info.append(["cam_pitch_view_{}".format(view_i),
+                                             "cam_yaw_view_{}".format(view_i),
+                                             "cam_distance_view_{}".format(view_i)])
+
+        mapping_cam_info_lable = OrderedDict()
+        mapping_cam_info_one_hot = OrderedDict()
+        # create a different mapping for echt setting
+        n_classes = []
+        for cam_info_view in lable_keys_cam_view_info:
+            for cam_inf in cam_info_view:
+                if "pitch" in cam_inf:
+                    min_val, max_val = -50, -35.
+                    n_bins = 15
+                elif "yaw" in cam_inf:
+                    min_val, max_val = -60., 210.
+                    n_bins = 30
+                elif "distance" in cam_inf:
+                    min_val, max_val = 0.7, 1.
+                    n_bins = 10
+
+                to_l, to_hot_l = create_lable_func(min_val, max_val, n_bins)
+                mapping_cam_info_lable[cam_inf] = to_l
+                mapping_cam_info_one_hot[cam_inf] = to_hot_l
+                if "view_0" in cam_inf:
+                    n_classes.append(n_bins)
+        print('n_classes: {}'.format(n_classes))
+
         for step in range(start, self.total_step):
 
             # ================== Train D ================== #
             self.D.train()
             self.G.train()
 
-            try:
-                if isinstance(self.data_loader.dataset, DoubleViewPairDataset):
-                    data = next(data_iter)
-                    real_images = torch.cat([data[key_views[0]], data[key_views[1]]])
-                else:
-                    real_images, _ = next(data_iter)
-            except:
-                data_iter = iter(self.data_loader)
-                if isinstance(self.data_loader.dataset, DoubleViewPairDataset):
-                    data = next(data_iter)
-                    real_images = torch.cat([data[key_views[0]], data[key_views[1]]])
-                else:
-                    real_images, _ = next(data_iter)
-
+            if isinstance(self.data_loader.dataset, DoubleViewPairDataset):
+                data = next(data_iter)
+                # real_images = torch.cat([data[key_views[0]], data[key_views[1]]])
+                #  for now only view 0
+                real_images = data[key_views[0]]
+                label_c = OrderedDict()
+                label_c_hot_in = OrderedDict()
+                for key_l, lable_func in mapping_cam_info_lable.items():
+                    # contin cam values to labels
+                    label_c[key_l] = torch.tensor(lable_func(data[key_l])).cuda()
+                    label_c_hot_in[key_l] = torch.tensor(
+                        mapping_cam_info_one_hot[key_l](data[key_l]), dtype=torch.float32).cuda()
+                d_one_hot = [label_c_hot_in[l] for l in lable_keys_cam_view_info[0]]
+            else:
+                real_images, _ = next(data_iter)
             # Compute loss with real images
             # dr1, dr2, df1, df2, gf1, gf2 are attention scores
             real_images = tensor2var(real_images)
@@ -133,7 +166,9 @@ class Trainer(object):
                 d_loss_real = torch.nn.ReLU()(1.0 - d_out_real).mean()
 
             # apply Gumbel Softmax
-            z = tensor2var(torch.randn(real_images.size(0), self.z_dim))
+            z=torch.randn(real_images.size(0), self.z_dim).cuda()
+            z=torch.cat([*d_one_hot,z],dim=1)# add view info
+            z = tensor2var(z)
             fake_images, gf1, gf2 = self.G(z)
             d_out_fake, df1, df2 = self.D(fake_images)
 
@@ -181,13 +216,15 @@ class Trainer(object):
             # KLD = torch.sum(KLD_element).mul_(-0.5)
 
             sampled = self.G.encoder.sampler(encoded)
-            fake_images, _, _ = self.G(sampled)
-            # MSEerr = self.MSECriterion(fake_images, real_images)
+            z=torch.cat([*d_one_hot,sampled],dim=1)# add view info
+            z = tensor2var(z) # TODO ok?
+            fake_images, _, _ = self.G(z)
+            MSEerr = self.MSECriterion(fake_images, real_images)
             # Reconstruction loss is pixel wise cross-entropy
-            a = fake_images.view(-1, self.num_pixels)
-            b = real_images.view(-1, self.num_pixels)
-            MSEerr = F.binary_cross_entropy(denorm(a),
-                                            denorm(b))
+            # a = fake_images.view(-1 , self.num_pixels)
+            # b = real_images.view(-1, self.num_pixels)
+            # MSEerr = F.binary_cross_entropy(denorm(a),
+                                            # denorm(b))
             # MSEerr = F.binary_cross_entropy(fake_images.view(-1, self.num_pixels),
             #                                 real_images.view(-1, self.num_pixels))
             rec = fake_images
@@ -223,27 +260,27 @@ class Trainer(object):
                 print("Elapsed [{}], G_step [{}/{}], D_step[{}/{}], d_out_real: {:.4f}, "
                       " ave_gamma_l3: {:.4f}, ave_gamma_l4: {:.4f},vae {:.4f}".
                       format(elapsed, step + 1, self.total_step, (step + 1),
-                             self.total_step, d_loss_real.data[0],
-                             self.G.attn1.gamma.mean().data[0], self.G.attn2.gamma.mean().data[0], VAEerr.data[0]))
+                             self.total_step, d_loss_real,
+                             self.G.attn1.gamma.mean(), self.G.attn2.gamma.mean(), VAEerr))
                 if vis is not None:
                     kw_update_vis = None
 
                     if self.d_plot is not None:
                         kw_update_vis = 'append'
                         # kw_update_vis["update"] = 'append'
-                    self.d_plot = vis.line(np.array([d_loss_real.data[0]]), X=np.array(
+                    self.d_plot = vis.line(np.array([d_loss_real.detach().cpu().numpy()]), X=np.array(
                         [step]), win=self.d_plot, update=kw_update_vis, opts=dict(
                         title="d_loss_real",
                         xlabel='Timestep',
                         ylabel='loss'
                     ))
-                    self.d_plot_fake = vis.line(np.array([d_loss_fake.data[0]]), X=np.array(
+                    self.d_plot_fake = vis.line(np.array([d_loss_fake.detach().cpu().numpy()]), X=np.array(
                         [step]), win=self.d_plot_fake, update=kw_update_vis, opts=dict(
                         title="d_loss_fake",
                         xlabel='Timestep',
                         ylabel='loss'
                     ))
-                    self.d_plot_vae = vis.line(np.array([VAEerr.data[0]]), X=np.array(
+                    self.d_plot_vae = vis.line(np.array([VAEerr.detach().cpu().numpy()]), X=np.array(
                         [step]), win=self.d_plot_vae, update=kw_update_vis, opts=dict(
                         title="VAEerr",
                         xlabel='Timestep',
@@ -275,7 +312,7 @@ class Trainer(object):
         self.d_plot = None
         self.d_plot_fake = None
         self.d_plot_vae = None
-        self.G = Generator(self.batch_size, self.imsize, self.z_dim, self.g_conv_dim).cuda()
+        self.G = Generator(self.batch_size, self.imsize, self.z_dim, self.cam_view_z, self.g_conv_dim).cuda()
         self.D = Discriminator(self.batch_size, self.imsize, self.d_conv_dim).cuda()
         if self.parallel:
             self.G = nn.DataParallel(self.G)

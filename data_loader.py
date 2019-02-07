@@ -51,6 +51,7 @@ class Data_Loader():
         # sim_frames = 5
         transformed_dataset_train = DoubleViewPairDataset(vid_dir=self.path,
                                                           number_views=2,
+                                                          add_camera_info=True,
                                                           # std_similar_frame_margin_distribution=sim_frames,
                                                           transform_frames=transformer_train)
         return transformed_dataset_train
