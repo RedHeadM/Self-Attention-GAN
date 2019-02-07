@@ -298,12 +298,12 @@ class Trainer(object):
                     ))
 
             # Sample images
-            if True or  (step + 1) % self.sample_step == 0:
+            if (step + 1) % self.sample_step == 0:
                 fake_images, _, _ = self.G(fixed_z)
                 fake_images=denorm(fake_images)
                 save_image(fake_images.data,
                            os.path.join(self.sample_path, '{}_fake.png'.format(step + 1)))
-                n = 8
+                n = 10
                 imgs = denorm(torch.cat([real_images.data[:n], rec.data[:n]]))
                 title = '{}_var_rec'.format(step + 1)
                 title_fixed = '{}_fixed'.format(step + 1)
@@ -313,7 +313,7 @@ class Trainer(object):
                     self.rec_win = vis.images(imgs, win=self.rec_win,
                                               opts=dict(title=title, width=64*n, height=64*2),)
                     self.fixed_win = vis.images(fake_images, win=self.fixed_win,
-                                              opts=dict(title=title_fixed, width=64*n, height=64*2),)
+                                              opts=dict(title=title_fixed, width=64*n, height=64*4),)
 
             if (step+1) % model_save_step == 0:
                 torch.save(self.G.state_dict(),
