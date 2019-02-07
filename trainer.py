@@ -14,6 +14,7 @@ from torchtcn.utils.dataset import DoubleViewPairDataset
 from torchvision.utils import save_image
 from utils import *
 from collections import OrderedDict
+from sklearn.utils import shuffle
 try:
     import visdom
     vis = visdom.Visdom()
@@ -37,7 +38,7 @@ class Trainer(object):
         self.imsize = config.imsize
         self.g_num = config.g_num
         self.z_dim = config.z_dim
-        self.cam_view_z = 15+30+10
+        self.cam_view_z = 20+40+10
         self.g_conv_dim = config.g_conv_dim
         self.d_conv_dim = config.d_conv_dim
         self.parallel = config.parallel
@@ -71,7 +72,8 @@ class Trainer(object):
         self.vae_rec_path = os.path.join(config.sample_path, "vae_rec")
         os.makedirs(self.vae_rec_path, exist_ok=True)  # TODO
         print('vae_rec_path: {}'.format(self.vae_rec_path))
-        self.model_save_path = os.path.join(config.model_save_path, self.version)
+        self.model_save_path = os.path.join(
+            config.model_save_path, self.version)
 
         self.num_pixels = self.imsize * 2 * 3
 
@@ -126,10 +128,10 @@ class Trainer(object):
             for cam_inf in cam_info_view:
                 if "pitch" in cam_inf:
                     min_val, max_val = -50, -35.
-                    n_bins = 15
+                    n_bins = 20
                 elif "yaw" in cam_inf:
                     min_val, max_val = -60., 210.
-                    n_bins = 30
+                    n_bins = 40
                 elif "distance" in cam_inf:
                     min_val, max_val = 0.7, 1.
                     n_bins = 10
@@ -140,7 +142,7 @@ class Trainer(object):
                 if "view_0" in cam_inf:
                     n_classes.append(n_bins)
         print('cam view one hot infputs {}'.format(n_classes))
-        assert sum(n_classes)== self.cam_view_z
+        assert sum(n_classes) == self.cam_view_z
         for step in range(start, self.total_step):
 
             # ================== Train D ================== #
@@ -149,22 +151,28 @@ class Trainer(object):
 
             if isinstance(self.data_loader.dataset, DoubleViewPairDataset):
                 data = next(data_iter)
+                key_views,lable_keys_cam_view_info=shuffle(key_views,lable_keys_cam_view_info)
                 # real_images = torch.cat([data[key_views[0]], data[key_views[1]]])
                 #  for now only view 0
                 real_images = data[key_views[0]]
+                real_images_view1 = data[key_views[1]]
                 label_c = OrderedDict()
                 label_c_hot_in = OrderedDict()
                 for key_l, lable_func in mapping_cam_info_lable.items():
                     # contin cam values to labels
-                    label_c[key_l] = torch.tensor(lable_func(data[key_l])).cuda()
+                    label_c[key_l] = torch.tensor(
+                        lable_func(data[key_l])).cuda()
                     label_c_hot_in[key_l] = torch.tensor(
                         mapping_cam_info_one_hot[key_l](data[key_l]), dtype=torch.float32).cuda()
-                d_one_hot = [label_c_hot_in[l] for l in lable_keys_cam_view_info[0]]
+                d_one_hot_view0 = [label_c_hot_in[l]
+                    for l in lable_keys_cam_view_info[0]]
+                d_one_hot_view1 = [label_c_hot_in[l] for l in lable_keys_cam_view_info[1]]
             else:
                 real_images, _ = next(data_iter)
             # Compute loss with real images
             # dr1, dr2, df1, df2, gf1, gf2 are attention scores
             real_images = tensor2var(real_images)
+            real_images_view1 = tensor2var(real_images_view1)
             d_out_real, dr1, dr2 = self.D(real_images)
             if self.adv_loss == 'wgan-gp':
                 d_loss_real = - torch.mean(d_out_real)
@@ -175,9 +183,9 @@ class Trainer(object):
             encoded = self.G.encoder(real_images)
             sampled = self.G.encoder.sampler(encoded)
             # z=torch.randn(real_images.size(0), self.z_dim).cuda()
-            z=torch.cat([*d_one_hot,sampled],dim=1) # add view info
-            if  fixed_z is None:
-                fixed_z=tensor2var(torch.cat([*d_one_hot,sampled],dim=1))# add view info
+            z = torch.cat([*d_one_hot_view0, sampled], dim=1) # add view info
+            if fixed_z is None:
+                fixed_z = tensor2var(torch.cat([*d_one_hot_view0, sampled], dim=1))# add view info
             z = tensor2var(z)
             fake_images, gf1, gf2 = self.G(z)
             d_out_fake, df1, df2 = self.D(fake_images)
@@ -202,7 +210,8 @@ class Trainer(object):
 
                 grad = torch.autograd.grad(outputs=out,
                                            inputs=interpolated,
-                                           grad_outputs=torch.ones(out.size()).cuda(),
+                                           grad_outputs=torch.ones(
+                                               out.size()).cuda(),
                                            retain_graph=True,
                                            create_graph=True,
                                            only_inputs=True)[0]
@@ -226,23 +235,26 @@ class Trainer(object):
             KLD = torch.sum(KLD_element).mul_(-0.5)
 
             sampled = self.G.encoder.sampler(encoded)
-            z=torch.cat([*d_one_hot,sampled],dim=1)# add view info
-            z = tensor2var(z) # TODO ok?
-            fake_images, _, _ = self.G(z)
-            MSEerr = self.MSECriterion(fake_images, real_images)
-            # Reconstruction loss is pixel wise cross-entropy
-            # a = fake_images.view(-1 , self.num_pixels)
-            # b = real_images.view(-1, self.num_pixels)
-            # MSEerr = F.binary_cross_entropy(denorm(a),
-                                            # denorm(b))
-            # MSEerr = F.binary_cross_entropy(fake_images.view(-1, self.num_pixels),
-            #                                 real_images.view(-1, self.num_pixels))
-            rec = fake_images
-            # VAEerr = MSEerr
+            z = torch.cat([*d_one_hot_view0, sampled], dim=1)# add view info 0
+            z = tensor2var(z)
+            fake_images_0, _, _ = self.G(z)
+            MSEerr = self.MSECriterion(fake_images_0, real_images)
+            rec = fake_images_0
             VAEerr = KLD + MSEerr
-            self.reset_grad()
-            # VAEerr.backward()
-            # self.g_optimizer.step()
+            # encode the fake view and recon loss to view1
+            encoded = self.G.encoder(fake_images_0)
+            mu = encoded[0]
+            logvar = encoded[1]
+            KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
+            KLD = torch.sum(KLD_element).mul_(-0.5)
+
+            sampled = self.G.encoder.sampler(encoded)
+            z = torch.cat([*d_one_hot_view1, sampled], dim=1)# add view info 1
+            z = tensor2var(z)
+            fake_images_view1, _, _ = self.G(z)
+            rec_fake= fake_images_view1
+            MSEerr += self.MSECriterion(fake_images_view1, real_images_view1)
+            VAEerr+= KLD + MSEerr
 
             # ================== Train G and gumbel ================== #
             # Create random noise
@@ -250,6 +262,7 @@ class Trainer(object):
             # fake_images, _, _ = self.G(z)
 
             # Compute loss with fake images
+            fake_images=torch.cat([fake_images_0,fake_images_view1])
             g_out_fake, _, _ = self.D(fake_images)  # batch x n
             if self.adv_loss == 'wgan-gp':
                 g_loss_fake = - g_out_fake.mean()
@@ -257,14 +270,13 @@ class Trainer(object):
                 g_loss_fake = - g_out_fake.mean()
 
             self.reset_grad()
-            # g_loss_fake.backward()
             loss = g_loss_fake+VAEerr*self.num_pixels
             loss.backward()
 
             self.g_optimizer.step()
 
             # Print out log info
-            if (step + 1) % self.log_step == 0:
+            if   (step + 1) % self.log_step == 0:
                 elapsed = time.time() - start_time
                 elapsed = str(datetime.timedelta(seconds=elapsed))
                 print("Elapsed [{}], G_step [{}/{}], D_step[{}/{}], d_out_real: {:.4f}, "
@@ -298,20 +310,24 @@ class Trainer(object):
                     ))
 
             # Sample images
-            if (step + 1) % self.sample_step == 0:
+            if  (step + 1) % self.sample_step == 0:
                 fake_images, _, _ = self.G(fixed_z)
-                fake_images=denorm(fake_images)
+                fake_images= denorm(fake_images)
                 save_image(fake_images.data,
                            os.path.join(self.sample_path, '{}_fake.png'.format(step + 1)))
-                n = 10
+                n = 8
                 imgs = denorm(torch.cat([real_images.data[:n], rec.data[:n]]))
-                title = '{}_var_rec'.format(step + 1)
+                imgs_rec_fake = denorm(torch.cat([real_images_view1.data[:n], rec_fake.data[:n]]))
+                title = '{}_var_rec_real'.format(step + 1)
+                title_rec_fake = '{}_var_rec_fake'.format(step + 1)
                 title_fixed = '{}_fixed'.format(step + 1)
                 save_image(imgs,
                            os.path.join(self.vae_rec_path, title+".png"), nrow=n)
                 if vis is not None:
                     self.rec_win = vis.images(imgs, win=self.rec_win,
                                               opts=dict(title=title, width=64*n, height=64*2),)
+                    self.rec_fake_win = vis.images(imgs_rec_fake, win=self.rec_fake_win,
+                                              opts=dict(title=title_rec_fake, width=64*n, height=64*2),)
                     self.fixed_win = vis.images(fake_images, win=self.fixed_win,
                                               opts=dict(title=title_fixed, width=64*n, height=64*4),)
 
@@ -323,6 +339,7 @@ class Trainer(object):
 
     def build_model(self):
         self.rec_win = None
+        self.rec_fake_win = None
         self.fixed_win = None
         self.d_plot = None
         self.d_plot_fake = None
@@ -337,17 +354,17 @@ class Trainer(object):
         # self.g_optimizer = torch.optim.Adam(self.G.parameters(), self.g_lr, [self.beta1, self.beta2])
         self.g_optimizer = torch.optim.Adam(
             filter(lambda p: p.requires_grad, self.G.parameters()), self.g_lr, [self.beta1, self.beta2])
-        self.d_optimizer = torch.optim.Adam(
+        self.d_optimizer=torch.optim.Adam(
             filter(lambda p: p.requires_grad, self.D.parameters()), self.d_lr, [self.beta1, self.beta2])
 
-        self.c_loss = torch.nn.CrossEntropyLoss()
+        self.c_loss=torch.nn.CrossEntropyLoss()
         # print networks
         print(self.G)
         print(self.D)
 
     def build_tensorboard(self):
         from logger import Logger
-        self.logger = Logger(self.log_path)
+        self.logger=Logger(self.log_path)
 
     def load_pretrained_model(self):
         self.G.load_state_dict(torch.load(os.path.join(
@@ -361,5 +378,13 @@ class Trainer(object):
         self.g_optimizer.zero_grad()
 
     def save_sample(self, data_iter):
-        real_images, _ = next(data_iter)
-        save_image(denorm(real_images), os.path.join(self.sample_path, 'real.png'))
+        real_images, _=next(data_iter)
+        save_image(denorm(real_images), os.path.join(
+            self.sample_path, 'real.png'))
+
+
+    def save_sample(self, data_iter):
+        real_images, _=next(data_iter)
+        save_image(denorm(real_images), os.path.join(
+            self.sample_path, 'real.png'))
+
