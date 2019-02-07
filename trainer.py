@@ -178,7 +178,7 @@ class Trainer(object):
             mu = encoded[0]
             logvar = encoded[1]
             KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
-            KLD = torch.sum(KLD_element).mul_(-0.5)
+            # KLD = torch.sum(KLD_element).mul_(-0.5)
 
             sampled = self.G.encoder.sampler(encoded)
             fake_images, _, _ = self.G(sampled)
@@ -191,7 +191,8 @@ class Trainer(object):
             # MSEerr = F.binary_cross_entropy(fake_images.view(-1, self.num_pixels),
             #                                 real_images.view(-1, self.num_pixels))
             rec = fake_images
-            VAEerr = KLD + MSEerr
+            VAEerr = MSEerr
+            # VAEerr = KLD + MSEerr
             self.reset_grad()
             # VAEerr.backward()
             # self.g_optimizer.step()
@@ -210,7 +211,7 @@ class Trainer(object):
 
             self.reset_grad()
             # g_loss_fake.backward()
-            loss = g_loss_fake+VAEerr*10
+            loss = g_loss_fake+VAEerr*self.num_pixels
             loss.backward()
 
             self.g_optimizer.step()
