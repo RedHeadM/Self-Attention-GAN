@@ -240,7 +240,7 @@ class Trainer(object):
             z = torch.cat([*d_one_hot_view0, *d_one_hot_view1, sampled], dim=1)  # add view info 0
             z = tensor2var(z)
             fake_images_0, _, _ = self.G(z)
-            MSEerr = self.MSECriterion(fake_images_0, real_images)
+            MSEerr = self.MSECriterion(fake_images_0, real_images_view1)
             rec = fake_images_0
             VAEerr = KLD + MSEerr
             # encode the fake view and recon loss to view1
@@ -255,7 +255,7 @@ class Trainer(object):
             z = tensor2var(z)
             fake_images_view1, _, _ = self.G(z)
             rec_fake = fake_images_view1
-            MSEerr = self.MSECriterion(fake_images_view1, real_images_view1)
+            MSEerr = self.MSECriterion(fake_images_view1, real_images)
             VAEerr += (KLD + MSEerr)*0.5
 
             # ================== Train G and gumbel ================== #
