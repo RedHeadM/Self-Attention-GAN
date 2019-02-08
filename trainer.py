@@ -19,16 +19,19 @@ try:
     import visdom
     vis = visdom.Visdom()
     vis.env = 'vae_dcgan'
-except (ImportError, AttributeError):
+    vis.close()#close all
+except (ImportError):
     vis = None
     print("visdom not used")
 
 
 class Trainer(object):
-    def __init__(self, data_loader, config):
+    def __init__(self, loader, config, data_loader_val=None):
 
         # Data loader
+        data_loader, data_loader_val = loader
         self.data_loader = data_loader
+        self.data_loader_val = data_loader_val
 
         # exact model and loss
         self.model = config.model
@@ -96,6 +99,7 @@ class Trainer(object):
         # WARNING  itertools.cycle  does not shuffle the data after each iteratio
         # Data iterator
         data_iter = iter(cycle(self.data_loader))
+        self.loader_val_iter = iter(cycle(self.data_loader_val))
         step_per_epoch = len(self.data_loader)
         model_save_step = int(self.model_save_step * step_per_epoch)
 
@@ -143,6 +147,12 @@ class Trainer(object):
                     n_classes.append(n_bins)
         print('cam view one hot infputs {}'.format(n_classes))
         assert sum(n_classes) * 2 == self.cam_view_z
+
+        def changing_factor(start,end, steps):
+            for i in range(steps):
+                yield i/(steps/(end-start))+start
+        cycle_factor_gen=changing_factor(0.5,1.,self.total_step)
+        triplet_factor_gen=changing_factor(0.1,1.,self.total_step)
         for step in range(start, self.total_step):
 
             # ================== Train D ================== #
@@ -181,7 +191,8 @@ class Trainer(object):
 
             # apply Gumbel Softmax
             encoded = self.G.encoder(real_images)
-            sampled = self.G.encoder.sampler(encoded)
+            sampled = encoded[0]
+            # sampled = self.G.encoder.sampler(encoded)
             # z=torch.randn(real_images.size(0), self.z_dim).cuda()
             z = torch.cat([*d_one_hot_view0, *d_one_hot_view1, sampled],
                           dim=1)  # add view info from to
@@ -232,31 +243,37 @@ class Trainer(object):
             # ================== Train VAE================== #
             encoded = self.G.encoder(real_images)
             mu = encoded[0]
-            logvar = encoded[1]
-            KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
-            KLD = torch.sum(KLD_element).mul_(-0.5)
+            sampled = mu
+            # logvar = encoded[1]
+            # KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
+            # KLD = torch.sum(KLD_element).mul_(-0.5)
+            # save_image(denorm(real_images[::2]), os.path.join(self.sample_path, "ancor.png"))
+            # save_image(denorm(real_images[1::2]), os.path.join(self.sample_path, "neg.png"))
+            # save_image(denorm(real_images_view1[::2]), os.path.join(self.sample_path, "pos.png"))
 
-            sampled = self.G.encoder.sampler(encoded)
+            triplet_loss = self.triplet_loss(
+                anchor=real_images[::2], positive=real_images[1::2], negative=real_images_view1[::2])
+            # sampled = self.G.encoder.sampler(encoded)
             z = torch.cat([*d_one_hot_view0, *d_one_hot_view1, sampled], dim=1)  # add view info 0
             z = tensor2var(z)
             fake_images_0, _, _ = self.G(z)
             MSEerr = self.MSECriterion(fake_images_0, real_images_view1)
             rec = fake_images_0
-            VAEerr = KLD + MSEerr
+            VAEerr = MSEerr  # +KLD
             # encode the fake view and recon loss to view1
             encoded = self.G.encoder(fake_images_0)
             mu = encoded[0]
-            logvar = encoded[1]
-            KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
-            KLD = torch.sum(KLD_element).mul_(-0.5)
-
-            sampled = self.G.encoder.sampler(encoded)
+            sampled = mu
+            # logvar = encoded[1]
+            # KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
+            # KLD = torch.sum(KLD_element).mul_(-0.5)
+            # sampled = self.G.encoder.sampler(encoded)
             z = torch.cat([*d_one_hot_view1, *d_one_hot_view0, sampled], dim=1)  # add view info 1
             z = tensor2var(z)
             fake_images_view1, _, _ = self.G(z)
             rec_fake = fake_images_view1
             MSEerr = self.MSECriterion(fake_images_view1, real_images)
-            VAEerr += (KLD + MSEerr)*0.5
+            VAEerr += MSEerr *next(cycle_factor_gen)  # (KLD + MSEerr)  # *0.5
 
             # ================== Train G and gumbel ================== #
             # Create random noise
@@ -264,7 +281,7 @@ class Trainer(object):
             # fake_images, _, _ = self.G(z)
 
             # Compute loss with fake images
-            fake_images = torch.cat([fake_images_0, fake_images_view1])
+            fake_images = torch.cat([fake_images_0[::2], fake_images_view1[1::2]])
             g_out_fake, _, _ = self.D(fake_images)  # batch x n
             if self.adv_loss == 'wgan-gp':
                 g_loss_fake = - g_out_fake.mean()
@@ -272,7 +289,7 @@ class Trainer(object):
                 g_loss_fake = - g_out_fake.mean()
 
             self.reset_grad()
-            loss = g_loss_fake+VAEerr*self.num_pixels
+            loss = g_loss_fake+VAEerr+triplet_loss*next(triplet_factor_gen)
             loss.backward()
 
             self.g_optimizer.step()
@@ -286,6 +303,11 @@ class Trainer(object):
                       format(elapsed, step + 1, self.total_step, (step + 1),
                              self.total_step, d_loss_real,
                              self.G.attn1.gamma.mean(), self.G.attn2.gamma.mean(), VAEerr))
+
+                distance_pos, product_pos, distance_neg, product_neg = self._get_view_pair_distances()
+
+                print("distance_pos {:.3}, neg {:.3},dot pos {:.3} neg {:.3}".format(
+                    distance_pos, distance_neg, product_pos, product_neg))
                 if vis is not None:
                     kw_update_vis = None
 
@@ -309,6 +331,24 @@ class Trainer(object):
                         title="VAEerr",
                         xlabel='Timestep',
                         ylabel='loss'
+                    ))
+                    self.d_plot_triplet_loss = vis.line(np.array([triplet_loss.detach().cpu().numpy()]), X=np.array(
+                        [step]), win=self.d_plot_triplet_loss, update=kw_update_vis, opts=dict(
+                        title="triplet_loss",
+                        xlabel='Timestep',
+                        ylabel='loss'
+                    ))
+                    self.d_plot_distance_pos = vis.line(np.array([distance_pos]), X=np.array(
+                        [step]), win=self.d_plot_distance_pos, update=kw_update_vis, opts=dict(
+                        title="distance pos",
+                        xlabel='Timestep',
+                        ylabel='dist'
+                    ))
+                    self.d_plot_distance_neg = vis.line(np.array([distance_neg]), X=np.array(
+                        [step]), win=self.d_plot_distance_neg, update=kw_update_vis, opts=dict(
+                        title="distance neg",
+                        xlabel='Timestep',
+                        ylabel='dist'
                     ))
 
             # Sample images
@@ -339,6 +379,44 @@ class Trainer(object):
                 torch.save(self.D.state_dict(),
                            os.path.join(self.model_save_path, '{}_D.pth'.format(step + 1)))
 
+    def _get_view_pair_distances(self):
+        def encode(x):
+            encoded = self.G.encoder(x)
+            mu = encoded[0]
+            return mu
+        # dot product are mean free
+        key_views = ["frames views {}".format(i) for i in range(2)]
+        sample_batched = next(self.loader_val_iter)
+        anchor_emb = encode(sample_batched[key_views[0]].cuda())
+        positive_emb = encode(sample_batched[key_views[1]].cuda())
+        distance_pos = np.linalg.norm(
+            anchor_emb.data.cpu().numpy() - positive_emb.data.cpu().numpy(), axis=1).mean()
+        dots = []
+        for e1, e2 in zip(anchor_emb.data.cpu().numpy(), positive_emb.data.cpu().numpy()):
+            dots.append(np.dot(e1-e1.mean(), e2-e2.mean()))
+        product_pos = np.mean(dots)
+
+        n = len(anchor_emb)
+        emb_pos = anchor_emb.data.cpu().numpy()
+        emb_neg = positive_emb.data.cpu().numpy()
+        cnt, distance_neg, product_neg = 0., 0., 0.
+        for i in range(n):
+            for j in range(n):
+                if j != i:
+                    d_negative = np.linalg.norm(
+                        emb_pos[i] - emb_neg[j])
+                    distance_neg += d_negative
+                    product_neg += np.dot(emb_pos[i]-emb_pos[i].mean(),
+                                          emb_neg[j]-emb_neg[j].mean())
+                    cnt += 1
+        distance_neg /= cnt
+        product_neg /= cnt
+        # distance_pos = np.asscalar(distance_pos)
+        # product_pos = np.asscalar(product_pos)
+        # distance_neg = np.asscalar(distance_neg)
+        # product_neg = np.asscalar(product_neg)
+        return distance_pos, product_pos, distance_neg, product_neg
+
     def build_model(self):
         self.rec_win = None
         self.rec_fake_win = None
@@ -346,6 +424,9 @@ class Trainer(object):
         self.d_plot = None
         self.d_plot_fake = None
         self.d_plot_vae = None
+        self.d_plot_triplet_loss = None
+        self.d_plot_distance_neg = None
+        self.d_plot_distance_pos = None
         self.G = Generator(self.batch_size, self.imsize, self.z_dim,
                            self.cam_view_z, self.g_conv_dim).cuda()
         self.D = Discriminator(self.batch_size, self.imsize, self.d_conv_dim).cuda()
@@ -353,6 +434,7 @@ class Trainer(object):
             self.G = nn.DataParallel(self.G)
             self.D = nn.DataParallel(self.D)
         self.MSECriterion = nn.MSELoss()
+        self.triplet_loss = nn.TripletMarginLoss()
         # Loss and optimizer
         # self.g_optimizer = torch.optim.Adam(self.G.parameters(), self.g_lr, [self.beta1, self.beta2])
         self.g_optimizer = torch.optim.Adam(
