@@ -242,8 +242,8 @@ class Trainer(object):
 
             # ================== Train VAE================== #
             encoded = self.G.encoder(real_images)
-            mu = encoded[0]
-            sampled = mu
+            mu_0 = encoded[0]
+            sampled = mu_0
             # logvar = encoded[1]
             # KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
             # KLD = torch.sum(KLD_element).mul_(-0.5)
@@ -261,8 +261,8 @@ class Trainer(object):
             VAEerr = MSEerr  # +KLD
             # encode the fake view and recon loss to view1
             encoded = self.G.encoder(fake_images_0)
-            mu = encoded[0]
-            sampled = mu
+            mu_1 = encoded[0]
+            sampled = mu_1
             # logvar = encoded[1]
             # KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
             # KLD = torch.sum(KLD_element).mul_(-0.5)
@@ -274,15 +274,15 @@ class Trainer(object):
             MSEerr = self.MSECriterion(fake_images_view1, real_images)
             VAEerr += MSEerr *next(cycle_factor_gen)  # (KLD + MSEerr)  # *0.5
             triplet_loss = self.triplet_loss(
-                anchor=fake_images_0[::2], positive=fake_images_0[1::2], negative=fake_images_view1[::2])
+                anchor=mu_0[::2], positive=mu_0[1::2], negative=mu_1[::2])
             # ================== Train G and gumbel ================== #
             # Create random noise
             # z = tensor2var(torch.randn(real_images.size(0), self.z_dim))
             # fake_images, _, _ = self.G(z)
 
             # Compute loss with fake images
-            fake_images = torch.cat([fake_images_0, fake_images_view1]) # rm triplets
-            save_image(denorm(fake_images), os.path.join(self.sample_path, "d_in.png"))
+            # fake_images = torch.cat([fake_images_0, fake_images_view1]) # rm triplets
+            fake_images = torch.cat([fake_images_0[::2], fake_images_view1[::2]]) # rm triplets
             g_out_fake, _, _ = self.D(fake_images)  # batch x n
             if self.adv_loss == 'wgan-gp':
                 g_loss_fake = - g_out_fake.mean()
@@ -290,7 +290,7 @@ class Trainer(object):
                 g_loss_fake = - g_out_fake.mean()
 
             self.reset_grad()
-            loss = g_loss_fake+VAEerr+triplet_loss*next(triplet_factor_gen)
+            loss = g_loss_fake*4.+VAEerr+triplet_loss*next(triplet_factor_gen)
             loss.backward()
 
             self.g_optimizer.step()
@@ -305,10 +305,7 @@ class Trainer(object):
                              self.total_step, d_loss_real,
                              self.G.attn1.gamma.mean(), self.G.attn2.gamma.mean(), VAEerr))
 
-                distance_pos, product_pos, distance_neg, product_neg = self._get_view_pair_distances()
 
-                print("distance_pos {:.3}, neg {:.3},dot pos {:.3} neg {:.3}".format(
-                    distance_pos, distance_neg, product_pos, product_neg))
                 if vis is not None:
                     kw_update_vis = None
 
@@ -339,18 +336,7 @@ class Trainer(object):
                         xlabel='Timestep',
                         ylabel='loss'
                     ))
-                    self.d_plot_distance_pos = vis.line(np.array([distance_pos]), X=np.array(
-                        [step]), win=self.d_plot_distance_pos, update=kw_update_vis, opts=dict(
-                        title="distance pos",
-                        xlabel='Timestep',
-                        ylabel='dist'
-                    ))
-                    self.d_plot_distance_neg = vis.line(np.array([distance_neg]), X=np.array(
-                        [step]), win=self.d_plot_distance_neg, update=kw_update_vis, opts=dict(
-                        title="distance neg",
-                        xlabel='Timestep',
-                        ylabel='dist'
-                    ))
+
 
             # Sample images
             if (step + 1) % self.sample_step == 0:
@@ -366,6 +352,10 @@ class Trainer(object):
                 title_fixed = '{}_fixed'.format(step + 1)
                 save_image(imgs,
                            os.path.join(self.vae_rec_path, title+".png"), nrow=n)
+                distance_pos, product_pos, distance_neg, product_neg = self._get_view_pair_distances()
+
+                print("distance_pos {:.3}, neg {:.3},dot pos {:.3} neg {:.3}".format(
+                    distance_pos, distance_neg, product_pos, product_neg))
                 if vis is not None:
                     self.rec_win = vis.images(imgs, win=self.rec_win,
                                               opts=dict(title=title, width=64*n, height=64*2),)
@@ -374,6 +364,21 @@ class Trainer(object):
                     self.fixed_win = vis.images(fake_images, win=self.fixed_win,
                                                 opts=dict(title=title_fixed, width=64*n, height=64*4),)
 
+                    kw_update_vis = None
+                    if self.d_plot_distance_pos is not None:
+                        kw_update_vis = 'append'
+                    self.d_plot_distance_pos = vis.line(np.array([distance_pos]), X=np.array(
+                        [step]), win=self.d_plot_distance_pos, update=kw_update_vis, opts=dict(
+                        title="distance pos",
+                        xlabel='Timestep',
+                        ylabel='dist'
+                    ))
+                    self.d_plot_distance_neg = vis.line(np.array([distance_neg]), X=np.array(
+                        [step]), win=self.d_plot_distance_neg, update=kw_update_vis, opts=dict(
+                        title="distance neg",
+                        xlabel='Timestep',
+                        ylabel='dist'
+                    ))
             if (step+1) % model_save_step == 0:
                 torch.save(self.G.state_dict(),
                            os.path.join(self.model_save_path, '{}_G.pth'.format(step + 1)))
