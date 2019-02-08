@@ -25,7 +25,7 @@ def denorm(x):
     return out.clamp_(0, 1)
 
 
-def create_lable_func(min_val, max_val, n_bins):
+def create_lable_func(min_val, max_val, n_bins,clip=False):
     ''' genrate function to encode continus values to n classes
         return mappingf funciton to lable or to one hot lable
         usage:
@@ -34,6 +34,7 @@ def create_lable_func(min_val, max_val, n_bins):
         print("y leables", labl(x_fit))
         print("yhot leables",  hot_l(x_fit))
     '''
+
     x_fit = np.linspace(min_val, max_val, 5000)
     bins = np.linspace(min_val, max_val, n_bins)
     x_fit = np.digitize(x_fit, bins)
@@ -47,9 +48,13 @@ def create_lable_func(min_val, max_val, n_bins):
 
     def _enc_lables(data):
         fit = data.cpu().numpy() if isinstance(data, torch.Tensor) else data
+        if clip:
+            fit= np.clip(fit, min_val, max_val)
         return le.transform(np.digitize(fit, bins))
 
     def _enc_lables_hot(data):
         fit = data.cpu().numpy() if isinstance(data, torch.Tensor) else data
+        if clip:
+            fit= np.clip(fit, min_val, max_val)
         return le_one_hot.transform(np.digitize(fit, bins))
     return _enc_lables, _enc_lables_hot

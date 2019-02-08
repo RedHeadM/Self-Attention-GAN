@@ -41,7 +41,7 @@ class Trainer(object):
         self.imsize = config.imsize
         self.g_num = config.g_num
         self.z_dim = config.z_dim
-        self.cam_view_z = (20+40+10)*2
+        self.cam_view_z = (20+40+10)*2+5
         self.g_conv_dim = config.g_conv_dim
         self.d_conv_dim = config.d_conv_dim
         self.parallel = config.parallel
@@ -146,7 +146,10 @@ class Trainer(object):
                 if "view_0" in cam_inf:
                     n_classes.append(n_bins)
         print('cam view one hot infputs {}'.format(n_classes))
-        assert sum(n_classes) * 2 == self.cam_view_z
+        task_progess_bins =5
+        _,task_progress_hot_func=create_lable_func(0,115,n_bins=task_progess_bins,clip=True)
+
+        assert sum(n_classes) * 2+task_progess_bins == self.cam_view_z
 
         def changing_factor(start,end, steps):
             for i in range(steps):
@@ -177,6 +180,7 @@ class Trainer(object):
                 d_one_hot_view0 = [label_c_hot_in[l]
                                    for l in lable_keys_cam_view_info[0]]
                 d_one_hot_view1 = [label_c_hot_in[l] for l in lable_keys_cam_view_info[1]]
+                d_task_progress= torch.tensor(task_progress_hot_func(data['frame index']),dtype=torch.float32).cuda()
             else:
                 real_images, _ = next(data_iter)
             # Compute loss with real images
@@ -191,14 +195,13 @@ class Trainer(object):
 
             # apply Gumbel Softmax
             encoded = self.G.encoder(real_images)
-            sampled = encoded[0]
-            # sampled = self.G.encoder.sampler(encoded)
-            # z=torch.randn(real_images.size(0), self.z_dim).cuda()
-            z = torch.cat([*d_one_hot_view0, *d_one_hot_view1, sampled],
+            sampled = self.G.encoder.sampler(encoded)
+            z=torch.randn(real_images.size(0), self.z_dim).cuda()
+            z = torch.cat([*d_one_hot_view0, *d_one_hot_view1,d_task_progress, sampled],
                           dim=1)  # add view info from to
             if fixed_z is None:
                 fixed_z = tensor2var(
-                    torch.cat([*d_one_hot_view0, *d_one_hot_view1, sampled], dim=1))  # add view info
+                    torch.cat([*d_one_hot_view0, *d_one_hot_view1,d_task_progress, sampled], dim=1))  # add view info
             z = tensor2var(z)
             fake_images, gf1, gf2 = self.G(z)
             d_out_fake, df1, df2 = self.D(fake_images)
@@ -243,36 +246,34 @@ class Trainer(object):
             # ================== Train VAE================== #
             encoded = self.G.encoder(real_images)
             mu_0 = encoded[0]
-            sampled = mu_0
-            # logvar = encoded[1]
-            # KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
-            # KLD = torch.sum(KLD_element).mul_(-0.5)
+            logvar = encoded[1]
+            KLD_element = mu_0.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
+            KLD = torch.sum(KLD_element).mul_(-0.5)
             # save_image(denorm(real_images[::2]), os.path.join(self.sample_path, "ancor.png"))
             # save_image(denorm(real_images[1::2]), os.path.join(self.sample_path, "neg.png"))
             # save_image(denorm(real_images_view1[::2]), os.path.join(self.sample_path, "pos.png"))
 
 
-            # sampled = self.G.encoder.sampler(encoded)
-            z = torch.cat([*d_one_hot_view0, *d_one_hot_view1, sampled], dim=1)  # add view info 0
+            sampled = self.G.encoder.sampler(encoded)
+            z = torch.cat([*d_one_hot_view0, *d_one_hot_view1,d_task_progress, sampled], dim=1)  # add view info 0
             z = tensor2var(z)
             fake_images_0, _, _ = self.G(z)
             MSEerr = self.MSECriterion(fake_images_0, real_images_view1)
             rec = fake_images_0
-            VAEerr = MSEerr  # +KLD
+            VAEerr = MSEerr +KLD
             # encode the fake view and recon loss to view1
             encoded = self.G.encoder(fake_images_0)
             mu_1 = encoded[0]
-            sampled = mu_1
-            # logvar = encoded[1]
-            # KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
-            # KLD = torch.sum(KLD_element).mul_(-0.5)
-            # sampled = self.G.encoder.sampler(encoded)
-            z = torch.cat([*d_one_hot_view1, *d_one_hot_view0, sampled], dim=1)  # add view info 1
+            logvar = encoded[1]
+            KLD_element = mu_1.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
+            KLD = torch.sum(KLD_element).mul_(-0.5)
+            sampled = self.G.encoder.sampler(encoded)
+            z = torch.cat([*d_one_hot_view1, *d_one_hot_view0,d_task_progress, sampled], dim=1)  # add view info 1
             z = tensor2var(z)
             fake_images_view1, _, _ = self.G(z)
             rec_fake = fake_images_view1
             MSEerr = self.MSECriterion(fake_images_view1, real_images)
-            VAEerr += MSEerr *next(cycle_factor_gen)  # (KLD + MSEerr)  # *0.5
+            VAEerr += (KLD+MSEerr) *next(cycle_factor_gen)  # (KLD + MSEerr)  # *0.5
             triplet_loss = self.triplet_loss(
                 anchor=mu_0[::2], positive=mu_0[1::2], negative=mu_1[::2])
             # ================== Train G and gumbel ================== #
@@ -290,7 +291,7 @@ class Trainer(object):
                 g_loss_fake = - g_out_fake.mean()
 
             self.reset_grad()
-            loss = g_loss_fake*4.+VAEerr+triplet_loss*next(triplet_factor_gen)
+            loss = g_loss_fake*4.+VAEerr*self.num_pixels+triplet_loss*next(triplet_factor_gen)
             loss.backward()
 
             self.g_optimizer.step()

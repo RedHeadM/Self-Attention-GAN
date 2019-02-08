@@ -257,8 +257,8 @@ class _EncoderSA(nn.Module):
 
         last1.append(nn.Conv2d(curr_dim, nz, 4))
         self.last1 = nn.Sequential(*last1)
-        # last2.append(nn.Conv2d(curr_dim, nz, 4))
-        # self.last2 = nn.Sequential(*last2)
+        last2.append(nn.Conv2d(curr_dim, nz, 4))
+        self.last2 = nn.Sequential(*last2)
 
         self.attn1 = Self_Attn(256, 'relu')
         self.attn2 = Self_Attn(512, 'relu')
@@ -271,6 +271,6 @@ class _EncoderSA(nn.Module):
         out = self.l4(out)
         out, p2 = self.attn2(out)
         out1 = self.last1(out)
-        # out2 = self.last2(out)
+        out2 = self.last2(out)
         # mu and var
-        return out1.view(-1, self.nz), None  # out2.view(-1, self.nz)  # p1, p2
+        return out1.view(-1, self.nz), out2.view(-1, self.nz)  # p1, p2
