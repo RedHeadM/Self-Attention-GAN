@@ -251,8 +251,7 @@ class Trainer(object):
             # save_image(denorm(real_images[1::2]), os.path.join(self.sample_path, "neg.png"))
             # save_image(denorm(real_images_view1[::2]), os.path.join(self.sample_path, "pos.png"))
 
-            triplet_loss = self.triplet_loss(
-                anchor=real_images[::2], positive=real_images[1::2], negative=real_images_view1[::2])
+
             # sampled = self.G.encoder.sampler(encoded)
             z = torch.cat([*d_one_hot_view0, *d_one_hot_view1, sampled], dim=1)  # add view info 0
             z = tensor2var(z)
@@ -274,14 +273,16 @@ class Trainer(object):
             rec_fake = fake_images_view1
             MSEerr = self.MSECriterion(fake_images_view1, real_images)
             VAEerr += MSEerr *next(cycle_factor_gen)  # (KLD + MSEerr)  # *0.5
-
+            triplet_loss = self.triplet_loss(
+                anchor=fake_images_0[::2], positive=fake_images_0[1::2], negative=fake_images_view1[::2])
             # ================== Train G and gumbel ================== #
             # Create random noise
             # z = tensor2var(torch.randn(real_images.size(0), self.z_dim))
             # fake_images, _, _ = self.G(z)
 
             # Compute loss with fake images
-            fake_images = torch.cat([fake_images_0[::2], fake_images_view1[1::2]])
+            fake_images = torch.cat([fake_images_0, fake_images_view1]) # rm triplets
+            save_image(denorm(fake_images), os.path.join(self.sample_path, "d_in.png"))
             g_out_fake, _, _ = self.D(fake_images)  # batch x n
             if self.adv_loss == 'wgan-gp':
                 g_loss_fake = - g_out_fake.mean()
