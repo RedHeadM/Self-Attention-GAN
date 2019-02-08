@@ -291,7 +291,9 @@ class Trainer(object):
                 g_loss_fake = - g_out_fake.mean()
 
             self.reset_grad()
-            loss = g_loss_fake*4.+VAEerr*self.num_pixels+triplet_loss*next(triplet_factor_gen)
+            VAEerr*=self.num_pixels
+            triplet_loss*=self.num_pixels
+            loss = g_loss_fake*4.+VAEerr+triplet_loss*next(triplet_factor_gen)
             loss.backward()
 
             self.g_optimizer.step()
