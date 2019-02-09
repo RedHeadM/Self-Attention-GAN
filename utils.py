@@ -43,7 +43,7 @@ def create_lable_func(min_val, max_val, bins, clip=False):
     if isinstance(bins,int):
         bin_array = np.linspace(min_val, max_val, bins,endpoint=True)
     else:
-        assert bins >1
+        assert len(bins) >2
         bin_array =bins
     def _digitize(x):
         return  np.digitize(x, bin_array,right=True)
@@ -74,6 +74,7 @@ def create_lable_func(min_val, max_val, bins, clip=False):
 if __name__ =="__main__":
         def test_fix_bins(x_min,x_max,n_bins):
             to_lable, to_hot = create_lable_func(x_min, x_max, n_bins)
+            ''' test for dic '''
             n_data= n_bins#*(x_max - x_min)
             input_data =np.linspace(x_min, x_max, n_data)
             x_fit_lable = to_lable(input_data)
@@ -82,6 +83,7 @@ if __name__ =="__main__":
             expected_hot_size= n_bins if n_bins > 2 else 1
             assert x_fit_hot.shape[1] == expected_hot_size, "missing dim in one hot, min {}, max {},bins {}".format(x_min,x_max,n_bins)
             if expected_hot_size >1:
+                # check if lable fit is same with the one hot encoding
                 for l, one_hot in zip(x_fit_lable,x_fit_hot):
                     assert np.sum(one_hot)==1, " one hot not set or more are set "
                     idx_hot = np.nonzero(one_hot == 1)
@@ -94,4 +96,15 @@ if __name__ =="__main__":
             diff=100
             min_x= np.random.uniform(-diff,diff)
             test_fix_bins(min_x,np.random.uniform(min_x,min_x+diff),np.random.randint(2,111))
+
+        # test for with different bins
+        bins=[0,1,2,4,20,200]
+        input_data=[0,1,2,3,4,5,19,20,21,100,300]
+
+        to_lable, to_hot = create_lable_func(0, 200, bins,clip=True)
+        fit_l=to_lable(input_data)
+        print('fit_l: {}'.format(fit_l))
+        for i,l,e in zip(input_data,fit_l,[0,1,2,3,3,4,4,4,5,5,5]):
+            assert l==e, "for {} got lable{} expected {}".format(i,l,e)
+
 
