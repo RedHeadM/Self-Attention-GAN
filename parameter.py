@@ -44,14 +44,14 @@ def get_parameters():
     # Path
     parser.add_argument('--image_path', type=str,
                         default='/tmp/tcn_data/push_3_labled_V10_color/videos/train')
-    parser.add_argument('--log_path', type=str, default='/tmp/sagan/logs')
-    parser.add_argument('--model_save_path', type=str, default='/tmp/sagan/models')
-    parser.add_argument('--sample_path', type=str, default='/tmp/sagan/samples')
-    parser.add_argument('--attn_path', type=str, default='/tmp/sagan/attn')
+    parser.add_argument('--log_path', type=str, default='/media/markus/DATA/tcn_traind/sagan/logs')
+    parser.add_argument('--model_save_path', type=str, default='/media/markus/DATA/tcn_traind/sagan/models')
+    parser.add_argument('--sample_path', type=str, default='/media/markus/DATA/tcn_traind/sagan/samples')
+    parser.add_argument('--attn_path', type=str, default='/media/markus/DATA/tcn_traind/sagan/attn')
 
     # Step size
     parser.add_argument('--log_step', type=int, default=10)
     parser.add_argument('--sample_step', type=int, default=100)
-    parser.add_argument('--model_save_step', type=float, default=1.0)
+    parser.add_argument('--model_save_step', type=float, default=100.0)
 
     return parser.parse_args()

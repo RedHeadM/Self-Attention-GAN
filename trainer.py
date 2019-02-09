@@ -260,7 +260,7 @@ class Trainer(object):
             fake_images_0, _, _ = self.G(z)
             MSEerr = self.MSECriterion(fake_images_0, real_images_view1)
             rec = fake_images_0
-            VAEerr = MSEerr +KLD
+            VAEerr = MSEerr +KLD*0.1
             # encode the fake view and recon loss to view1
             encoded = self.G.encoder(fake_images_0)
             mu_1 = encoded[0]
@@ -273,7 +273,7 @@ class Trainer(object):
             fake_images_view1, _, _ = self.G(z)
             rec_fake = fake_images_view1
             MSEerr = self.MSECriterion(fake_images_view1, real_images)
-            VAEerr += (KLD+MSEerr) *next(cycle_factor_gen)  # (KLD + MSEerr)  # *0.5
+            VAEerr += (KLD*0.1+MSEerr) *next(cycle_factor_gen)  # (KLD + MSEerr)  # *0.5
             triplet_loss = self.triplet_loss(
                 anchor=mu_0[::2], positive=mu_0[1::2], negative=mu_1[::2])
             # ================== Train G and gumbel ================== #
